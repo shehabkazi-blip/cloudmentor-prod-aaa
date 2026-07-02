@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy Lambda backend and Amplify frontend
+    name: Deploy Lambda backend and update Amplify
     runs-on: ubuntu-latest
 
     steps:
@@ -32,88 +32,36 @@ jobs:
       - name: Set up AWS SAM CLI
         uses: aws-actions/setup-sam@v2
 
-      - name: Validate required secrets
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          SAM_STACK_NAME: ${{ secrets.SAM_STACK_NAME }}
-          AMPLIFY_APP_ID: ${{ secrets.AMPLIFY_APP_ID }}
-          AI_MODE: ${{ secrets.AI_MODE }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-          : "${AWS_REGION:?Missing AWS_REGION secret}"
-          : "${SAM_STACK_NAME:?Missing SAM_STACK_NAME secret}"
-          : "${AMPLIFY_APP_ID:?Missing AMPLIFY_APP_ID secret}"
-
-          MODE="${AI_MODE:-openai}"
-          if [ "$MODE" != "mock" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "OPENAI_API_KEY is required when AI_MODE is openai. Use AI_MODE=mock for a no-billing demo deployment."
-            exit 1
-          fi
-
       - name: Build and deploy backend with AWS SAM
         working-directory: backend
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          SAM_STACK_NAME: ${{ secrets.SAM_STACK_NAME }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
-          AI_MODE: ${{ secrets.AI_MODE }}
-          CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
         run: |
           set -euo pipefail
-          npm install --no-audit --no-fund
+          npm install
           sam build
-
-          MODEL_VALUE="${OPENAI_MODEL:-gpt-4.1-mini}"
-          MODE_VALUE="${AI_MODE:-openai}"
-          KEY_VALUE="${OPENAI_API_KEY:-mock-placeholder-no-openai-key}"
-          CORS_VALUE="${CORS_ORIGIN:?Missing CORS_ORIGIN secret (Should be your Amplify Live URL)}"
-
           sam deploy \
-            --stack-name "$SAM_STACK_NAME" \
-            --region "$AWS_REGION" \
+            --stack-name "${{ secrets.SAM_STACK_NAME }}" \
+            --region "${{ secrets.AWS_REGION }}" \
             --capabilities CAPABILITY_IAM \
             --s3-bucket "cloudmentor-sam-deploy-bucket-shehab" \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --parameter-overrides OpenAiApiKey="$KEY_VALUE",OpenAiModel="$MODEL_VALUE",AiMode="$MODE_VALUE",CorsOrigin="$CORS_VALUE"
+            --parameter-overrides OpenAiApiKey="${{ secrets.OPENAI_API_KEY }}" OpenAiModel="${{ secrets.OPENAI_MODEL }}" AiMode="${{ secrets.AI_MODE }}" CorsOrigin="${{ secrets.CORS_ORIGIN }}"
 
-      - name: Read backend outputs
-        id: backend_outputs
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          SAM_STACK_NAME: ${{ secrets.SAM_STACK_NAME }}
+      - name: Read backend outputs and Update Amplify
         run: |
           set -euo pipefail
+          # API URL বের করা
           API_BASE_URL=$(aws cloudformation describe-stacks \
-            --stack-name "$SAM_STACK_NAME" \
-            --region "$AWS_REGION" \
+            --stack-name "${{ secrets.SAM_STACK_NAME }}" \
+            --region "${{ secrets.AWS_REGION }}" \
             --query "Stacks[0].Outputs[?OutputKey=='ApiBaseUrl'].OutputValue" \
             --output text)
 
-          TABLE_NAME=$(aws cloudformation describe-stacks \
-            --stack-name "$SAM_STACK_NAME" \
-            --region "$AWS_REGION" \
-            --query "Stacks[0].Outputs[?OutputKey=='TableName'].OutputValue" \
-            --output text)
+          echo "Updating Amplify with API URL: $API_BASE_URL"
+          
+          # অ্যামপ্লিফাইয়ের এনভায়রনমেন্ট ভেরিয়েবল আপডেট করা
+          aws amplify update-app \
+            --app-id "${{ secrets.AMPLIFY_APP_ID }}" \
+            --environment-variables VITE_API_BASE_URL="$API_BASE_URL"
 
-          MATERIALS_BUCKET=$(aws cloudformation describe-stacks \
-            --stack-name "$SAM_STACK_NAME" \
-            --region "$AWS_REGION" \
-            --query "Stacks[0].Outputs[?OutputKey=='MaterialsBucketName'].OutputValue" \
-            --output text)
-
-          echo "api_base_url=$API_BASE_URL" >> "$GITHUB_OUTPUT"
-          echo "table_name=$TABLE_NAME" >> "$GITHUB_OUTPUT"
-          echo "materials_bucket=$MATERIALS_BUCKET" >> "$GITHUB_OUTPUT"
-          echo "Backend API: $API_BASE_URL"
-          echo "DynamoDB table: $TABLE_NAME"
-          echo "S3 bucket: $MATERIALS_BUCKET"
-
-      - name: Deployment summary
-        run: |
-          echo "CloudMentor Backend Deployment Successful!"
-          echo "CloudMentor Backend API:  ${{ steps.backend_outputs.outputs.api_base_url }}"
-          echo "S3 Bucket Name:           ${{ steps.backend_outputs.outputs.materials_bucket }}"
-          echo "DynamoDB Table Name:      ${{ steps.backend_outputs.outputs.table_name }}"
+          echo "Amplify environment updated successfully."
