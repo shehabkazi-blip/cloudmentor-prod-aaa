@@ -121,10 +121,10 @@ jobs:
           npm run build
 
       - name: Zip frontend artifacts
-        working-directory: frontend/dist
         run: |
           set -euo pipefail
-          zip -r ../../build.zip .
+          # dist ফোল্ডারের ভেতরে ঢুকে ফাইলগুলোকে রুট ডিরেক্টরিতে সঠিকভাবে জিপ করা
+          cd frontend/dist && zip -r ../../build.zip .
 
       - name: Deploy frontend to AWS Amplify Hosting
         env:
@@ -132,19 +132,25 @@ jobs:
           AMPLIFY_APP_ID: ${{ secrets.AMPLIFY_APP_ID }}
         run: |
           set -euo pipefail
-          
+
           echo "Starting Amplify deployment for App ID: $AMPLIFY_APP_ID..."
-          
+
+          # জিপ ফাইলটি মেইন রুটে সঠিকভাবে তৈরি হয়েছে কি না তা যাচাই করা
+          if [ ! -f "build.zip" ]; then
+            echo "Error: build.zip was not found in the root directory!"
+            exit 1
+          fi
+
           # Generate upload URL
           UPLOAD_URL=$(aws amplify create-deployment --app-id "$AMPLIFY_APP_ID" --branch-name main --query 'zipUploadUrl' --output text)
-          
+
           # Upload zip file via curl
           curl -H "Content-Type: application/zip" --upload-file build.zip "$UPLOAD_URL"
-          
+
           # Start deployment job
           JOB_ID=$(aws amplify start-deployment --app-id "$AMPLIFY_APP_ID" --branch-name main --query 'jobSummary.jobId' --output text 2>/dev/null || \
                   aws amplify list-jobs --app-id "$AMPLIFY_APP_ID" --branch-name main --query 'jobSummaries[0].jobId' --output text)
-                  
+
           echo "Amplify deployment initiated successfully. Job ID: $JOB_ID"
 
       - name: Deployment summary
