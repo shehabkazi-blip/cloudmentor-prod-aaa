@@ -74,7 +74,7 @@ jobs:
             --stack-name "$SAM_STACK_NAME" \
             --region "$AWS_REGION" \
             --capabilities CAPABILITY_IAM \
-            --resolve-s3 \
+            --s3-bucket "cloudmentor-sam-deploy-bucket-shehab" \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --parameter-overrides OpenAiApiKey="$KEY_VALUE",OpenAiModel="$MODEL_VALUE",AiMode="$MODE_VALUE",CorsOrigin="$CORS_VALUE"
