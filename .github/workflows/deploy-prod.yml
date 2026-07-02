@@ -121,9 +121,9 @@ jobs:
           npm run build
 
       - name: Zip frontend artifacts
+        working-directory: frontend/dist
         run: |
           set -euo pipefail
-          cd frontend/dist
           zip -r ../../build.zip .
 
       - name: Deploy frontend to AWS Amplify Hosting
