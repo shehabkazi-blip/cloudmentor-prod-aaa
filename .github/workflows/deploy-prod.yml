@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy Lambda backend and EC2 frontend
+    name: Deploy Lambda backend and Amplify frontend
     runs-on: ubuntu-latest
 
     steps:
@@ -36,18 +36,14 @@ jobs:
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           SAM_STACK_NAME: ${{ secrets.SAM_STACK_NAME }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          AMPLIFY_APP_ID: ${{ secrets.AMPLIFY_APP_ID }}
           AI_MODE: ${{ secrets.AI_MODE }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
           : "${AWS_REGION:?Missing AWS_REGION secret}"
           : "${SAM_STACK_NAME:?Missing SAM_STACK_NAME secret}"
-          : "${EC2_HOST:?Missing EC2_HOST secret}"
-          : "${EC2_USER:?Missing EC2_USER secret}"
-          : "${EC2_SSH_KEY:?Missing EC2_SSH_KEY secret}"
+          : "${AMPLIFY_APP_ID:?Missing AMPLIFY_APP_ID secret}"
 
           MODE="${AI_MODE:-openai}"
           if [ "$MODE" != "mock" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
@@ -64,7 +60,6 @@ jobs:
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
           AI_MODE: ${{ secrets.AI_MODE }}
           CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
           set -euo pipefail
           npm install --no-audit --no-fund
@@ -73,7 +68,7 @@ jobs:
           MODEL_VALUE="${OPENAI_MODEL:-gpt-4.1-mini}"
           MODE_VALUE="${AI_MODE:-openai}"
           KEY_VALUE="${OPENAI_API_KEY:-mock-placeholder-no-openai-key}"
-          CORS_VALUE="${CORS_ORIGIN:-http://${EC2_HOST}}"
+          CORS_VALUE="${CORS_ORIGIN:?Missing CORS_ORIGIN secret (Should be your Amplify Live URL)}"
 
           sam deploy \
             --stack-name "$SAM_STACK_NAME" \
@@ -120,7 +115,7 @@ jobs:
           echo "DynamoDB table: $TABLE_NAME"
           echo "S3 bucket: $MATERIALS_BUCKET"
 
-      - name: Build frontend for EC2
+      - name: Build frontend for AWS Amplify
         working-directory: frontend
         env:
           VITE_API_BASE_URL: ${{ steps.backend_outputs.outputs.api_base_url }}
@@ -129,78 +124,36 @@ jobs:
           npm install --no-audit --no-fund
           npm run build
 
-      - name: Prepare SSH key
-        env:
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
+      - name: Zip frontend artifacts
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh
-          echo "$EC2_SSH_KEY" > ~/.ssh/cloudmentor.pem
-          chmod 600 ~/.ssh/cloudmentor.pem
-          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+          cd frontend/dist
+          zip -r ../../build.zip .
 
-      - name: Bootstrap EC2 web server
+      - name: Deploy frontend to AWS Amplify Hosting
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_APP_DIR: ${{ secrets.EC2_APP_DIR }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AMPLIFY_APP_ID: ${{ secrets.AMPLIFY_APP_ID }}
         run: |
           set -euo pipefail
-          APP_DIR="${EC2_APP_DIR:-/opt/cloudmentor}"
-          ssh -i ~/.ssh/cloudmentor.pem "$EC2_USER@$EC2_HOST" \
-            "APP_DIR='$APP_DIR' bash -s" < scripts/prod-ec2-bootstrap.sh
-
-      - name: Push full source code to EC2
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_APP_DIR: ${{ secrets.EC2_APP_DIR }}
-        run: |
-          set -euo pipefail
-          APP_DIR="${EC2_APP_DIR:-/opt/cloudmentor}"
-
-          rsync -az --delete \
-            --exclude '.git' \
-            --exclude 'node_modules' \
-            --exclude 'frontend/node_modules' \
-            --exclude 'backend/node_modules' \
-            --exclude 'frontend/dist' \
-            --exclude 'backend/.aws-sam' \
-            --exclude 'backend/env.json' \
-            --exclude 'backend/env.local.json' \
-            --exclude 'backend/env.ec2.json' \
-            --exclude 'backend/env.production.json' \
-            --exclude 'frontend/.env' \
-            --exclude 'frontend/.env.local' \
-            --exclude 'frontend/.env.ec2' \
-            --exclude 'frontend/.env.production' \
-            --exclude '*.zip' \
-            -e "ssh -i ~/.ssh/cloudmentor.pem" \
-            ./ "$EC2_USER@$EC2_HOST:$APP_DIR/"
-
-      - name: Publish frontend build to Nginx
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
-        run: |
-          set -euo pipefail
-          rsync -az --delete \
-            -e "ssh -i ~/.ssh/cloudmentor.pem" \
-            frontend/dist/ "$EC2_USER@$EC2_HOST:/tmp/cloudmentor-dist/"
-
-          ssh -i ~/.ssh/cloudmentor.pem "$EC2_USER@$EC2_HOST" \
-            "sudo mkdir -p /var/www/cloudmentor && \
-             sudo rsync -a --delete /tmp/cloudmentor-dist/ /var/www/cloudmentor/ && \
-             sudo chown -R www-data:www-data /var/www/cloudmentor && \
-             sudo nginx -t && \
-             sudo systemctl reload nginx"
+          
+          echo "Starting Amplify deployment for App ID: $AMPLIFY_APP_ID..."
+          
+          # Generate upload URL
+          UPLOAD_URL=$(aws amplify create-deployment --app-id "$AMPLIFY_APP_ID" --branch-name main --query 'zipUploadUrl' --output text)
+          
+          # Upload zip file via curl
+          curl -H "Content-Type: application/zip" --upload-file build.zip "$UPLOAD_URL"
+          
+          # Start deployment job
+          JOB_ID=$(aws amplify start-deployment --app-id "$AMPLIFY_APP_ID" --branch-name main --query 'jobSummary.jobId' --output text 2>/dev/null || \
+                  aws amplify list-jobs --app-id "$AMPLIFY_APP_ID" --branch-name main --query 'jobSummaries[0].jobId' --output text)
+                  
+          echo "Amplify deployment initiated successfully. Job ID: $JOB_ID"
 
       - name: Deployment summary
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
         run: |
-          echo "CloudMentor frontend: http://${EC2_HOST}"
-          echo "CloudMentor backend:  ${{ steps.backend_outputs.outputs.api_base_url }}"
-          echo "S3 bucket:            ${{ steps.backend_outputs.outputs.materials_bucket }}"
-          echo "DynamoDB table:       ${{ steps.backend_outputs.outputs.table_name }}"
+          echo "CloudMentor Deployment Successful!"
+          echo "CloudMentor Backend API:  ${{ steps.backend_outputs.outputs.api_base_url }}"
+          echo "S3 Bucket Name:           ${{ steps.backend_outputs.outputs.materials_bucket }}"
+          echo "DynamoDB Table Name:      ${{ steps.backend_outputs.outputs.table_name }}"
