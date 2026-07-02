@@ -77,11 +77,7 @@ jobs:
             --resolve-s3 \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --parameter-overrides \
-              OpenAiApiKey="$KEY_VALUE" \
-              OpenAiModel="$MODEL_VALUE" \
-              AiMode="$MODE_VALUE" \
-              CorsOrigin="$CORS_VALUE"
+            --parameter-overrides OpenAiApiKey="$KEY_VALUE",OpenAiModel="$MODEL_VALUE",AiMode="$MODE_VALUE",CorsOrigin="$CORS_VALUE"
 
       - name: Read backend outputs
         id: backend_outputs
