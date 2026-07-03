@@ -5,8 +5,9 @@ export default defineConfig({
   plugins: [react()],
   base: './', 
   build: {
-    outDir: 'dist', // বিল্ড ফাইল কোথায় থাকবে
-    emptyOutDir: true, // নতুন বিল্ডের আগে পুরনো ফাইল মুছে ফেলবে
+    outDir: 'dist',
+    emptyOutDir: true,
+    assetsDir: 'assets', // এটি যোগ করুন - ফাইলগুলো ফোল্ডারের ভেতর যাবে
   },
   server: {
     port: 5173
